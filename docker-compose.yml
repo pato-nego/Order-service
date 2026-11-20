@@ -1,0 +1,17 @@
+services:
+
+  order:
+    image: order-service:latest
+    env_file: .env
+
+    environment:
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./rds-ca.pem:/rds-ca.pem:ro
+
+    restart: unless-stopped
+    mem_limit: 700m

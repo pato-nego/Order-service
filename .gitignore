@@ -14,3 +14,4 @@ replay_pid*
 .vscode/
 target/
 .DS_Store
+.env
