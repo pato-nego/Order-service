@@ -24,7 +24,7 @@ mvn clean package
 
 ## Deploy
 
-O workflow `.github/workflows/ci-cd.yml` roda em todo push e pull request na `main`: instala o contrato [Order](https://github.com/pato-nego/Order), compila e testa o serviço. No push, constrói a imagem, envia por SSH para a EC2 do Order, sobe o container com o `docker-compose.yml` e confere o `/orders/health-check`.
+O workflow `.github/workflows/ci-cd.yml` roda em todo push e pull request na `main`: instala o contrato [Order](https://github.com/pato-nego/Order), compila e testa o serviço. No push, constrói a imagem, varre a imagem com o Trivy (reprova se houver vulnerabilidade HIGH ou CRITICAL que já tenha correção), envia por SSH para a EC2 do Order, sobe o container com o `docker-compose.yml` e confere o `/orders/health-check`.
 
 Secrets do repositório (Settings > Secrets and variables > Actions):
 
