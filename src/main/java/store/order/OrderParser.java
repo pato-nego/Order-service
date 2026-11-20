@@ -26,12 +26,6 @@ public final class OrderParser {
         return new OrderOut(order.getId(), order.getDate(), currency, items, total);
     }
 
-    public static List<OrderSummaryOut> toSummary(List<Order> orders) {
-        return orders.stream()
-            .map(order -> new OrderSummaryOut(order.getId(), order.getDate(), order.getTotal()))
-            .toList();
-    }
-
     private static BigDecimal convert(BigDecimal value, BigDecimal rate) {
         return value.multiply(rate).setScale(2, RoundingMode.HALF_UP);
     }

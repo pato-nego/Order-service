@@ -6,11 +6,14 @@ import java.util.UUID;
 
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface OrderRepository extends JpaRepository<Order, UUID> {
 
-    @EntityGraph(attributePaths = "items")
-    List<Order> findByIdAccountOrderByDateAsc(String idAccount);
+    @Query("select new store.order.OrderSummaryOut(o.id, o.date, o.total) from store.order.Order o "
+        + "where o.idAccount = :idAccount order by o.date asc")
+    List<OrderSummaryOut> findSummaryByIdAccount(@Param("idAccount") String idAccount);
 
     @EntityGraph(attributePaths = "items")
     Optional<Order> findByIdAndIdAccount(UUID id, String idAccount);

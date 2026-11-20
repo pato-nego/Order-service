@@ -40,7 +40,7 @@ public class OrderService {
 
     public List<OrderSummaryOut> findAll(String idAccount) {
         requireAccount(idAccount);
-        return OrderParser.toSummary(orderRepository.findByIdAccountOrderByDateAsc(idAccount));
+        return orderRepository.findSummaryByIdAccount(idAccount);
     }
 
     public OrderOut findById(String idAccount, UUID id, String currency) {

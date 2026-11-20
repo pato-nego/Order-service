@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -105,12 +106,12 @@ class OrderServiceTest {
 
     @Test
     void findAllReturnsTheSummaryOfTheOrdersOfTheAccount() {
-        when(orderRepository.findByIdAccountOrderByDateAsc(ACCOUNT)).thenReturn(List.of(storedOrder()));
+        final OrderSummaryOut summary = new OrderSummaryOut(ORDER_ID, LocalDateTime.of(2026, 11, 20, 10, 0), new BigDecimal("26.44"));
+        when(orderRepository.findSummaryByIdAccount(ACCOUNT)).thenReturn(List.of(summary));
 
         final List<OrderSummaryOut> orders = orderService.findAll(ACCOUNT);
 
-        assertThat(orders).hasSize(1);
-        assertThat(orders.get(0).total()).isEqualByComparingTo("26.44");
+        assertThat(orders).containsExactly(summary);
     }
 
     @Test
