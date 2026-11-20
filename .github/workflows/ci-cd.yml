@@ -1,0 +1,80 @@
+name: Order Service CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Order-service
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pato-nego/Order
+          path: Order
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: maven
+
+      - run: mvn -B -f Order/pom.xml install
+
+      - run: mvn -B -f Order-service/pom.xml verify
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: order-service-jar
+          path: Order-service/target/*.jar
+          if-no-files-found: error
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency: deploy-production
+    env:
+      SSH_TARGET: ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: order-service-jar
+          path: target
+
+      - name: Build image
+        run: docker build -t order-service:latest .
+
+      - name: Configure SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Send image
+        run: docker save order-service:latest | gzip | ssh "$SSH_TARGET" 'gunzip | docker load'
+
+      - name: Restart containers
+        run: |
+          ssh "$SSH_TARGET" 'mkdir -p ~/order'
+          scp docker-compose.yml "$SSH_TARGET":~/order/
+          ssh "$SSH_TARGET" 'cd ~/order && docker compose up -d && docker image prune -f'
+
+      - name: Check health
+        run: |
+          ssh "$SSH_TARGET" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/orders/health-check && exit 0; sleep 2; done; cd ~/order && docker compose logs --tail 50; exit 1'
