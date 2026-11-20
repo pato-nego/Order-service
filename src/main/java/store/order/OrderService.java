@@ -1,15 +1,17 @@
 package store.order;
 
 import java.math.BigDecimal;
-import java.util.HashMap;
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import feign.FeignException;
 import lombok.RequiredArgsConstructor;
@@ -19,20 +21,26 @@ import lombok.RequiredArgsConstructor;
 public class OrderService {
 
     private static final Pattern CURRENCY_CODE = Pattern.compile("^[A-Z]{3}$");
+    private static final Duration PRODUCT_TTL = Duration.ofSeconds(30);
+    private static final Duration RATE_TTL = Duration.ofSeconds(60);
 
     private final OrderRepository orderRepository;
     private final ProductClient productClient;
     private final ExchangeClient exchangeClient;
 
+    private final Cache<UUID, ProductClient.Product> productCache = Caffeine.newBuilder()
+        .expireAfterWrite(PRODUCT_TTL).maximumSize(10_000).build();
+    private final Cache<String, BigDecimal> rateCache = Caffeine.newBuilder()
+        .expireAfterWrite(RATE_TTL).maximumSize(200).build();
+
     public OrderOut create(String idAccount, OrderIn request) {
         requireAccount(idAccount);
 
-        final Map<UUID, ProductClient.Product> products = new HashMap<>();
         final List<OrderItem> items = request.items().stream()
-            .map(item -> {
-                final ProductClient.Product product = products.computeIfAbsent(item.idProduct(), this::findProduct);
-                return new OrderItem(item.idProduct(), item.quantity(), product.price());
-            })
+            .map(item -> new OrderItem(
+                item.idProduct(),
+                item.quantity(),
+                productCache.get(item.idProduct(), this::findProduct).price()))
             .toList();
 
         return OrderParser.to(orderRepository.save(new Order(idAccount, items)));
@@ -54,7 +62,7 @@ public class OrderService {
         }
 
         final String code = currency.trim().toUpperCase();
-        return OrderParser.to(order, code, findRate(idAccount, code));
+        return OrderParser.to(order, code, rateCache.get(code, key -> findRate(idAccount, key)));
     }
 
     private ProductClient.Product findProduct(UUID idProduct) {

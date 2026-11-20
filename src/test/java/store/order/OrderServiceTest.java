@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -169,6 +170,57 @@ class OrderServiceTest {
         when(exchangeClient.quote(ACCOUNT, "USD", "BRL")).thenThrow(feignError(502));
 
         assertStatus(() -> orderService.findById(ACCOUNT, ORDER_ID, "BRL"), HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
+    void createReusesTheCachedProductAcrossOrders() {
+        when(productClient.findById(TOMATO)).thenReturn(new ProductClient.Product(TOMATO, new BigDecimal("10.12")));
+        when(orderRepository.save(any(Order.class))).thenAnswer(call -> call.getArgument(0));
+
+        orderService.create(ACCOUNT, request(item(TOMATO, 1)));
+        orderService.create("acc-2", request(item(TOMATO, 3)));
+
+        verify(productClient, times(1)).findById(TOMATO);
+    }
+
+    @Test
+    void createDoesNotCacheAProductFailure() {
+        when(productClient.findById(TOMATO))
+            .thenThrow(feignError(500))
+            .thenReturn(new ProductClient.Product(TOMATO, new BigDecimal("10.12")));
+        when(orderRepository.save(any(Order.class))).thenAnswer(call -> call.getArgument(0));
+
+        assertStatus(() -> orderService.create(ACCOUNT, request(item(TOMATO, 1))), HttpStatus.SERVICE_UNAVAILABLE);
+        final OrderOut created = orderService.create(ACCOUNT, request(item(TOMATO, 1)));
+
+        assertThat(created.total()).isEqualByComparingTo("10.12");
+        verify(productClient, times(2)).findById(TOMATO);
+    }
+
+    @Test
+    void findByIdReusesTheCachedRateAcrossRequests() {
+        when(orderRepository.findByIdAndIdAccount(ORDER_ID, ACCOUNT)).thenReturn(Optional.of(storedOrder()));
+        when(exchangeClient.quote(ACCOUNT, "USD", "BRL")).thenReturn(new ExchangeClient.Quote(new BigDecimal("6.00")));
+
+        final OrderOut first = orderService.findById(ACCOUNT, ORDER_ID, "BRL");
+        final OrderOut second = orderService.findById(ACCOUNT, ORDER_ID, "brl");
+
+        assertThat(second.total()).isEqualByComparingTo(first.total());
+        verify(exchangeClient, times(1)).quote(ACCOUNT, "USD", "BRL");
+    }
+
+    @Test
+    void findByIdDoesNotCacheAnExchangeFailure() {
+        when(orderRepository.findByIdAndIdAccount(ORDER_ID, ACCOUNT)).thenReturn(Optional.of(storedOrder()));
+        when(exchangeClient.quote(ACCOUNT, "USD", "BRL"))
+            .thenThrow(feignError(502))
+            .thenReturn(new ExchangeClient.Quote(new BigDecimal("6.00")));
+
+        assertStatus(() -> orderService.findById(ACCOUNT, ORDER_ID, "BRL"), HttpStatus.SERVICE_UNAVAILABLE);
+        final OrderOut brl = orderService.findById(ACCOUNT, ORDER_ID, "BRL");
+
+        assertThat(brl.total()).isEqualByComparingTo("158.64");
+        verify(exchangeClient, times(2)).quote(ACCOUNT, "USD", "BRL");
     }
 
     private static OrderIn request(ItemIn... items) {
