@@ -357,6 +357,54 @@ docker compose logs -f order
 - **Firewall:** a `8080` aceita o gateway e um IP liberado para testes; a `22` aceita o SSH do deploy. Do outro lado, o banco, o Product e o Exchange têm regras de entrada que liberam o Order nas portas `5432`, `8080` e `8000`.
 - **Gateway:** a rota `/orders/**` e as variáveis `ORDER_URL` e `ORDER_IP` ficam no `nego-pato`, em `deploy/ec2`.
 
+### Kubernetes
+
+A pasta [`k8s/`](k8s/) tem os manifestos para rodar o Order num cluster (EKS):
+
+| Arquivo | O que é |
+|---|---|
+| `deployment.yaml` | o Deployment `order`: probes no `/orders/health-check`, recursos (memória de 512 Mi a 700 Mi, CPU de 250m a 1), variáveis do banco vindas de ConfigMap e Secret, e o certificado do RDS montado em `/etc/rds` |
+| `service.yaml` | o Service `order` (ClusterIP, porta `8080`), o nome que o gateway usa por padrão (`http://order:8080`) |
+| `hpa.yaml` | o autoescalador por CPU (alvo de 50%), de 1 a 3 réplicas |
+
+A imagem do `deployment.yaml` é um texto provisório (`registry.invalid/order-service:bootstrap`), como no Exchange. Quem publica troca pelo endereço real, e o `kubectl set image --local` faz isso sem editar o arquivo.
+
+A configuração e os segredos são criados no cluster, e **não** ficam no Git. O certificado do RDS é público, então vai num ConfigMap:
+
+```bash
+kubectl create configmap order-config --from-literal=DATABASE_HOST=ENDPOINT_DO_RDS --from-literal=DATABASE_DB=NOME_DO_BANCO --from-literal=PRODUCT_URL=http://IP_DO_PRODUCT:8080 --from-literal=EXCHANGE_URL=http://exchange:8000
+```
+
+```bash
+kubectl create secret generic order-secrets --from-literal=DATABASE_USERNAME=USUARIO --from-literal=DATABASE_PASSWORD=SENHA
+```
+
+```bash
+kubectl create configmap rds-ca --from-file=rds-ca.pem
+```
+
+Para aplicar, com a imagem já publicada (por exemplo, no Docker Hub):
+
+```bash
+kubectl set image --local -f k8s/deployment.yaml order=docker.io/SEU_USUARIO/order-service:TAG -o yaml | kubectl apply -f -
+kubectl apply -f k8s/service.yaml
+kubectl rollout status deployment/order
+kubectl apply -f k8s/hpa.yaml
+```
+
+O HPA precisa do metrics-server no cluster. O k3s já traz, mas o EKS não: é preciso instalá-lo.
+
+Os manifestos foram validados num cluster local (k3s, Kubernetes 1.34), com o Postgres e o Product e o Exchange simulados dentro dele:
+
+- o pod fica `Ready` pelo health-check e não reinicia;
+- as variáveis do banco são resolvidas dentro do container, e o certificado aparece em `/etc/rds`;
+- de outro pod, o Service responde ao health-check, rejeita a chamada sem `id-account` e cria e lista pedidos;
+- sob carga, o HPA subiu de 1 para 3 réplicas em cerca de 45 s.
+
+Nesse teste o banco não tem TLS, então a URL usou `sslmode=disable` no lugar do `verify-full` dos manifestos. É normal ver alguns avisos `Readiness probe failed` quando um pod acaba de subir, antes de o Spring terminar de iniciar. Se o nó for pequeno e a partida ficar mais lenta, aumente o `initialDelaySeconds`.
+
+**Antes de usar no EKS:** os pods precisam alcançar o RDS e o Product, o que depende de a VPC do cluster ser a do grupo (ou de ter conexão com ela) e de os security groups liberarem os nós. O CI ainda **não** publica no cluster: ele faz o deploy na EC2.
+
 ### CI/CD (GitHub Actions)
 
 O workflow [`ci-cd.yml`](.github/workflows/ci-cd.yml) roda a cada push e pull request na `main`:
@@ -405,4 +453,5 @@ O `.env` e o `rds-ca.pem` não passam pelo GitHub: eles são criados uma vez, di
 - **Listagem sem paginação:** `GET /orders` devolve todos os pedidos do usuário. O resumo é leve, mas para um usuário com milhares de pedidos a resposta cresce.
 - **Cache por instância:** com mais de uma instância do Order, cada uma guarda o seu, e a defasagem de preço pode diferir entre elas.
 - **Banco compartilhado:** o Order divide o banco e o usuário com o Product. Se a senha do Product mudar, o `.env` do Order precisa ser atualizado.
+- **Sem rollout no EKS:** os manifestos em `k8s/` existem e foram validados num cluster local, mas ainda não há cluster, nem registro de imagens, nem passo no CI que publique nele.
 - **Sem métricas Prometheus:** hoje só o gateway as expõe, e o grupo não tem um Prometheus para coletá-las. Adicionar ao Order é só configuração, mas custa de 12% a 20% de vazão no pior caso medido.
