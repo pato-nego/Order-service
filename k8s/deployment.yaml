@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order
+  template:
+    metadata:
+      labels:
+        app: order
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: order
+          image: registry.invalid/order-service:bootstrap
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=75
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: order-config
+                  key: DATABASE_HOST
+            - name: DATABASE_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: order-config
+                  key: DATABASE_DB
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: order-secrets
+                  key: DATABASE_USERNAME
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: order-secrets
+                  key: DATABASE_PASSWORD
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://$(DATABASE_HOST):5432/$(DATABASE_DB)?sslmode=verify-full&sslrootcert=/etc/rds/rds-ca.pem
+            - name: PRODUCT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: order-config
+                  key: PRODUCT_URL
+            - name: EXCHANGE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: order-config
+                  key: EXCHANGE_URL
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 700Mi
+              cpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /orders/health-check
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /orders/health-check
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 10
+          volumeMounts:
+            - name: rds-ca
+              mountPath: /etc/rds
+              readOnly: true
+      volumes:
+        - name: rds-ca
+          configMap:
+            name: rds-ca
