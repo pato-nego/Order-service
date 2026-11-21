@@ -359,15 +359,15 @@ docker compose logs -f order
 
 ### Kubernetes
 
-A pasta [`k8s/`](k8s/) tem os manifestos para rodar o Order num cluster (EKS):
+O arquivo [`k8s/k8s.yaml`](k8s/k8s.yaml) tem tudo para rodar o Order num cluster (EKS), no mesmo formato do Gateway e do Account, com três objetos:
 
-| Arquivo | O que é |
+| Objeto | O que é |
 |---|---|
-| `deployment.yaml` | o Deployment `order`: probes no `/orders/health-check`, recursos (memória de 512 Mi a 700 Mi, CPU de 250m a 1), variáveis do banco vindas de ConfigMap e Secret, e o certificado do RDS montado em `/etc/rds` |
-| `service.yaml` | o Service `order` (ClusterIP, porta `8080`), o nome que o gateway usa por padrão (`http://order:8080`) |
-| `hpa.yaml` | o autoescalador por CPU (alvo de 50%), de 1 a 3 réplicas |
+| Deployment `order` | probes no `/orders/health-check`, recursos (memória de 512 Mi a 700 Mi, CPU de 250m a 1), variáveis do banco vindas de ConfigMap e Secret, e o certificado do RDS montado em `/etc/rds` |
+| Service `order` | ClusterIP na porta `8080`, o nome que o gateway usa por padrão (`http://order:8080`) |
+| HorizontalPodAutoscaler `order` | autoescalador por CPU (alvo de 50%), de 1 a 3 réplicas |
 
-A imagem do `deployment.yaml` é um texto provisório (`registry.invalid/order-service:bootstrap`), como no Exchange. Quem publica troca pelo endereço real, e o `kubectl set image --local` faz isso sem editar o arquivo.
+A imagem do `k8s.yaml` é um texto provisório (`registry.invalid/order-service:bootstrap`), como no Exchange. Quem publica troca pelo endereço real. O `kubectl set image --local` **não serve** para este arquivo, porque ele tem três objetos e o comando só aceita o Deployment. Use o `sed` do comando abaixo ou edite a linha `image:`.
 
 A configuração e os segredos são criados no cluster, e **não** ficam no Git. O certificado do RDS é público, então vai num ConfigMap:
 
@@ -386,10 +386,8 @@ kubectl create configmap rds-ca --from-file=rds-ca.pem
 Para aplicar, com a imagem já publicada (por exemplo, no Docker Hub):
 
 ```bash
-kubectl set image --local -f k8s/deployment.yaml order=docker.io/SEU_USUARIO/order-service:TAG -o yaml | kubectl apply -f -
-kubectl apply -f k8s/service.yaml
+sed 's|registry.invalid/order-service:bootstrap|docker.io/SEU_USUARIO/order-service:TAG|' k8s/k8s.yaml | kubectl apply -f -
 kubectl rollout status deployment/order
-kubectl apply -f k8s/hpa.yaml
 ```
 
 O HPA precisa do metrics-server no cluster. O k3s já traz, mas o EKS não: é preciso instalá-lo.
@@ -401,7 +399,9 @@ Os manifestos foram validados num cluster local (k3s, Kubernetes 1.34), com o Po
 - de outro pod, o Service responde ao health-check, rejeita a chamada sem `id-account` e cria e lista pedidos;
 - sob carga, o HPA subiu de 1 para 3 réplicas em cerca de 45 s.
 
-Nesse teste o banco não tem TLS, então a URL usou `sslmode=disable` no lugar do `verify-full` dos manifestos. É normal ver alguns avisos `Readiness probe failed` quando um pod acaba de subir, antes de o Spring terminar de iniciar. Se o nó for pequeno e a partida ficar mais lenta, aumente o `initialDelaySeconds`.
+Nesse teste o banco não tem TLS, então a URL usou `sslmode=disable` no lugar do `verify-full` do manifesto.
+
+O Deployment tem uma `startupProbe` que dá até 5 minutos para o Spring subir antes de o Kubernetes reiniciar o pod. Ela existe porque, num nó com pouca CPU, a partida passa de 20 s (chegou a 50 s no teste), e sem ela a liveness probe matava o pod no meio da partida e repetia o ciclo. Por isso é normal ver avisos `Startup probe failed` enquanto o pod sobe. Se a partida passar de 5 minutos, o nó está pequeno demais para o limite de CPU do pod. Durante uma partida o uso de CPU passa do alvo do HPA, e ele pode subir uma réplica a mais por alguns minutos.
 
 **Antes de usar no EKS:** os pods precisam alcançar o RDS e o Product, o que depende de a VPC do cluster ser a do grupo (ou de ter conexão com ela) e de os security groups liberarem os nós. O CI ainda **não** publica no cluster: ele faz o deploy na EC2.
 
